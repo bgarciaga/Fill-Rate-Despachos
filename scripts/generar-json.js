@@ -12,20 +12,12 @@ const columnas = [
   "proveedor"
 ];
 
-const MAPA = {
-  pedido:          [1,  ["pedido"]],
-  codigo:          [3,  ["codigo", "articulo", "sku"]],
-  ean:             [7,  ["ean", "barra"]],
-  descripcion:     [8,  ["descripcion"]],
-  bultos_pedidos:  [10, ["bultos pedidos", "bul. pedidos", "bultos ped"]],
-  bultos_servidos: [11, ["bultos servidos", "bul. servidos", "bultos serv"]],
-  u_pedidas:       [12, ["u. pedidas", "unidades pedidas", "u pedidas"]],
-  u_anuladas:      [13, ["u. anuladas", "unidades anuladas", "u anuladas"]],
-  u_servidas:      [14, ["u. servidas", "unidades servidas", "u servidas"]],
-  pte_servir:      [15, ["pte", "pendiente"]],
-  stock:           [17, ["stock"]],
-  ubicacion:       [24, ["ubicacion"]],
-  proveedor:       [-1, ["proveedor"]]
+// Índices fijos del reporte (los originales)
+const COL = {
+  pedido: 1, codigo: 3, ean: 7, descripcion: 8,
+  bultos_pedidos: 10, bultos_servidos: 11,
+  u_pedidas: 12, u_anuladas: 13, u_servidas: 14, pte_servir: 15,
+  stock: 17, ubicacion: 24, proveedor: -1
 };
 
 const norm = s => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -37,7 +29,7 @@ const pad = n => String(n).padStart(2, "0");
 function parseFecha(v) {
   if (v === "" || v == null) return null;
   if (typeof v === "number") {
-    if (v < 30000 || v > 70000) return null;
+    if (v < 44000 || v > 50000) return null; // solo 2020–2036
     const p = XLSX.SSF.parse_date_code(v);
     return p ? { fecha: `${p.y}-${pad(p.m)}-${pad(p.d)}`, hora: `${pad(p.H)}:${pad(p.M)}` } : null;
   }
@@ -45,9 +37,9 @@ function parseFecha(v) {
     return { fecha: `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`, hora: `${pad(v.getHours())}:${pad(v.getMinutes())}` };
   }
   const s = txt(v);
-  let m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T]+(\d{1,2}):(\d{2}))?/);
+  let m = s.match(/(20\d{2})-(\d{1,2})-(\d{1,2})(?:[ T]+(\d{1,2}):(\d{2}))?/);
   if (m) { const [, y, mo, d, H = "0", M = "0"] = m; return { fecha: `${y}-${pad(mo)}-${pad(d)}`, hora: `${pad(H)}:${pad(M)}` }; }
-  m = s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})(?:[ T]+(\d{1,2}):(\d{2}))?/);
+  m = s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2}|\d{2})(?:[ T]+(\d{1,2}):(\d{2}))?/);
   if (m) { let [, d, mo, y, H = "0", M = "0"] = m; if (y.length === 2) y = "20" + y; return { fecha: `${y}-${pad(mo)}-${pad(d)}`, hora: `${pad(H)}:${pad(M)}` }; }
   return null;
 }
@@ -64,27 +56,24 @@ function buscarValor(data, palabras, filas = 4) {
   return "";
 }
 
+// Busca la fila de encabezados y solo detecta la columna de proveedor
 function detectarColumnas(data) {
-  let filaHeader = -1; const idx = {};
+  const idx = { ...COL };
+  let filaHeader = -1;
   for (let r = 0; r < Math.min(10, data.length); r++) {
     const row = (data[r] || []).map(norm);
     if (row.some(c => c.includes("pedido")) && row.some(c => c.includes("descripcion"))) {
       filaHeader = r;
-      for (const [k, [, keys]] of Object.entries(MAPA)) {
-        const i = row.findIndex(c => keys.some(key => c.includes(key)));
-        if (i >= 0) idx[k] = i;
-      }
+      const i = row.findIndex(c => c.includes("proveedor"));
+      if (i >= 0) idx.proveedor = i;
       break;
     }
   }
-  for (const [k, [def]] of Object.entries(MAPA)) if (idx[k] == null) idx[k] = def;
   return { filaHeader, idx };
 }
 
-// ---------- DIAGNÓSTICO ----------
 console.log("Carpeta:", path.resolve(carpeta));
 if (!fs.existsSync(carpeta)) { console.log("❌ La carpeta no existe"); process.exit(1); }
-console.log("Contenido:", fs.readdirSync(carpeta));
 
 const archivos = fs.readdirSync(carpeta)
   .filter(f => /\.xlsx?$/i.test(f) && !f.startsWith("~$"))
@@ -102,15 +91,12 @@ for (const archivo of archivos) {
   try { workbook = XLSX.readFile(ruta); }
   catch (e) { console.log("❌ No se pudo leer:", e.message); continue; }
 
-  console.log("Hojas:", workbook.SheetNames);
   const nombreHoja = workbook.SheetNames.find(n => norm(n) === norm(HOJA))
     || workbook.SheetNames.find(n => norm(n).includes("fillrate") || norm(n).includes("fill rate"))
     || workbook.SheetNames[0];
-  console.log("Usando hoja:", nombreHoja);
   const hoja = workbook.Sheets[nombreHoja];
 
   const data = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: "", raw: true });
-  console.log("Filas:", data.length);
   data.slice(0, 7).forEach((r, i) => console.log(`  fila ${i}:`, JSON.stringify(r)));
 
   const tienda = txt(data?.[1]?.[0]).toUpperCase() || "SIN TIENDA";
@@ -133,12 +119,12 @@ for (const archivo of archivos) {
 
   const { filaHeader, idx } = detectarColumnas(data);
   const inicio = filaHeader >= 0 ? filaHeader + 1 : 4;
-  console.log("Fila encabezado:", filaHeader, "· columnas:", JSON.stringify(idx));
+  console.log("Fila encabezado:", filaHeader, "· proveedor col:", idx.proveedor);
 
   const lineas = [];
   for (let i = inicio; i < data.length; i++) {
     const row = data[i];
-    if (!row) continue;
+    if (!row || !row[idx.pedido]) continue;
     const pedido = pedidoId(row[idx.pedido]);
     if (!pedido || norm(row[idx.pedido]).includes("total")) continue;
     lineas.push([
@@ -159,6 +145,7 @@ for (const archivo of archivos) {
   }
 
   console.log(`Tienda: ${tienda} · Fecha: ${fecha} ${hora} · Líneas: ${lineas.length}`);
+  if (lineas.length) console.log("  1ª línea:", JSON.stringify(lineas[0]));
   if (!lineas.length) { console.log("❌ Sin líneas, se omite"); continue; }
 
   const id = `${tienda}_${fecha}_${hora.replace(":", "")}_${numero}`;
@@ -166,7 +153,6 @@ for (const archivo of archivos) {
   ids.add(id);
 
   despachos.push({ id, numero, archivo, tienda, fecha, hora, finPreparacion, lineas });
-  console.log("✔ Agregado");
 }
 
 despachos.sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
