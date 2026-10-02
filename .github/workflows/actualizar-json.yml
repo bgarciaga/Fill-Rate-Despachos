@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'excels/**'
+      - 'scripts/**'
 
 jobs:
   generar:
@@ -19,3 +20,14 @@ jobs:
       - run: npm install
 
       - run: node scripts/generar-json.js
+
+      - name: Commit data.json
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add data.json
+
+          git diff --cached --quiet || git commit -m "Actualizar data.json"
+
+          git push
