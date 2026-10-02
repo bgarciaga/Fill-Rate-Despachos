@@ -1,0 +1,20 @@
+name: Generar JSON
+
+on:
+  push:
+    paths:
+      - 'excels/**'
+
+jobs:
+ **enerar:
+    runs-on: ubuntu-lates**
+    steps:
+      - uses: actions**heckout@v4
+
+      - uses: actions**etup-node@v4
+        with:
+      **  node-version: 20
+
+      - run: **m install
+
+      - run: node scri**s/generar-json.js
