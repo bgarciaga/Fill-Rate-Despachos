@@ -6,15 +6,16 @@ on:
       - 'excels/**'
 
 jobs:
- **enerar:
-    runs-on: ubuntu-lates**
+  generar:
+    runs-on: ubuntu-latest
+
     steps:
-      - uses: actions**heckout@v4
+      - uses: actions/checkout@v4
 
-      - uses: actions**etup-node@v4
+      - uses: actions/setup-node@v4
         with:
-      **  node-version: 20
+          node-version: 20
 
-      - run: **m install
+      - run: npm install
 
-      - run: node scri**s/generar-json.js
+      - run: node scripts/generar-json.js
