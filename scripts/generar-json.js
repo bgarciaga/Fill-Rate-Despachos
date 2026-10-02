@@ -39,26 +39,20 @@ function parseFecha(v) {
   if (m) { const [, y, mo, d, H = "0", M = "0", S = "0"] = m; return { fecha: `${y}-${pad(mo)}-${pad(d)}`, hora: `${pad(H)}:${pad(M)}`, seg: pad(S) }; }
   m = s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](20\d{2})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (m) { const [, d, mo, y, H = "0", M = "0", S = "0"] = m; return { fecha: `${y}-${pad(mo)}-${pad(d)}`, hora: `${pad(H)}:${pad(M)}`, seg: pad(S) }; }
-  m = s.match(/(\d{2})[\/\-.](\d{1,2})[\/\-.](\d{1,2})(?:[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
-  if (m) { const [, y, mo, d, H = "0", M = "0", S = "0"] = m; return { fecha: `20${y}-${pad(mo)}-${pad(d)}`, hora: `${pad(H)}:${pad(M)}`, seg: pad(S) }; }
   return null;
 }
 
-function buscarValor(data, palabras, filas = 5) {
-  for (let r = 0; r < Math.min(filas, data.length); r++) {
+// Todas las fechas en las primeras filas (antes de los encabezados), en orden
+function fechasEncabezado(data, hasta) {
+  const out = [];
+  for (let r = 0; r < Math.min(hasta, data.length); r++) {
     const row = data[r] || [];
     for (let c = 0; c < row.length; c++) {
-      const n = norm(row[c]);
-      if (palabras.some(p => n.includes(p))) {
-        // valor en la misma celda ("Lanzado: 2026/10/01 11:45")
-        const mismo = parseFecha(String(row[c]).split(/:\s*/).slice(1).join(":"));
-        if (mismo) return String(row[c]).split(/:\s*/).slice(1).join(":");
-        for (let k = c + 1; k < row.length; k++) if (row[k] !== "") return row[k];
-        if (data[r + 1] && data[r + 1][c] !== "") return data[r + 1][c];
-      }
+      const f = parseFecha(row[c]);
+      if (f) out.push({ ...f, r, c, label: norm(row[c - 1] || (data[r - 1] || [])[c] || "") });
     }
   }
-  return "";
+  return out;
 }
 
 // ---------- COLUMNAS ----------
@@ -70,11 +64,11 @@ function detectarColumnas(data) {
     if ((data[r] || []).some(c => norm(c).includes("descripcion"))) { hr = r; break; }
   }
   const idx = { ...COL_DEFAULT };
-  if (hr < 0) return { inicio: 4, idx, labels: [] };
+  if (hr < 0) return { hr: 4, inicio: 4, idx, labels: [] };
 
   const sub = data[hr + 1] || [];
   const subEsHeader = sub.some(c => /[a-z]/i.test(String(c))) && !sub.some(c => typeof c === "number");
-  const ancho = Math.max(...data.slice(hr - 1 < 0 ? 0 : hr - 1, hr + 3).map(r => (r || []).length));
+  const ancho = Math.max(...data.slice(Math.max(0, hr - 1), hr + 3).map(r => (r || []).length));
   const top = ffill(data[hr - 1]), main = data[hr] || [], mainF = ffill(main);
 
   const labels = [];
@@ -85,14 +79,12 @@ function detectarColumnas(data) {
   }
   const inicio = hr + (subEsHeader ? 2 : 1);
 
-  // filas de muestra
   const rows = data.slice(inicio).filter(r => r && r.filter(v => v !== "").length > 4).slice(0, 300);
   const stat = c => {
     const vals = rows.map(r => r[c]).filter(v => v !== "" && v != null);
     const n = vals.length || 1;
     return {
       n: vals.length,
-      num: vals.filter(isNum).length / n,
       ean: vals.filter(v => /^\d{8,14}$/.test(cleanId(v))).length / n,
       ubic: vals.filter(v => /^[A-Z0-9]{1,4}(-[A-Z0-9]{1,4}){2,}$/i.test(txt(v))).length / n,
       len: vals.reduce((a, v) => a + (/[a-z]/i.test(String(v)) ? txt(v).length : 0), 0) / n
@@ -112,9 +104,9 @@ function detectarColumnas(data) {
   take("proveedor", byLabel(l => /proveedor/.test(l)));
   take("pedido", byLabel(l => /pedido/.test(l) && !isB(l) && !/pedid[ao]s/.test(l)));
   take("codigo", byLabel(l => /codigo|articulo|sku/.test(l) && !/barra|ean/.test(l)));
-  take("ean", byLabel(l => /\bean\b|barra/.test(l)) >= 0 ? byLabel(l => /\bean\b|barra/.test(l)) : best(s => s.ean, 0.6));
+  const eanL = byLabel(l => /\bean\b|barra/.test(l));
+  take("ean", eanL >= 0 ? eanL : best(s => s.ean, 0.6));
   take("descripcion", byLabel(l => /descripcion/.test(l)));
-  // si la descripción quedó vacía (celdas combinadas), usar la columna con texto más largo
   if (S[idx.descripcion] && S[idx.descripcion].len < 5) { used.delete(idx.descripcion); take("descripcion", best(s => s.len, 10)); }
   take("ubicacion", best(s => s.ubic, 0.5));
   take("stock", byLabel(l => /stock|existencia/.test(l)));
@@ -125,7 +117,7 @@ function detectarColumnas(data) {
   take("u_servidas", byLabel(l => !isB(l) && /serv/.test(l)));
   take("u_pedidas", byLabel(l => !isB(l) && /pedid|ped\b|u\.? ?ped|cant/.test(l)));
 
-  return { inicio, idx, labels };
+  return { hr, inicio, idx, labels };
 }
 
 // ---------- PROCESO ----------
@@ -148,11 +140,18 @@ for (const archivo of archivos) {
   const data = XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], { header: 1, defval: "", raw: true });
   data.slice(0, 6).forEach((r, i) => console.log(`  fila ${i}:`, JSON.stringify(r)));
 
+  const { hr, inicio, idx, labels } = detectarColumnas(data);
+
   const tienda = (txt(data?.[1]?.[0]) || archivo.replace(/-\d+\.xlsx?$/i, "")).toUpperCase();
   const numero = archivo.match(/(\d+)\.xlsx?$/i)?.[1] || "";
 
-  const lanzRaw = buscarValor(data, ["lanzado", "lanzamiento"]);
-  let fl = parseFecha(lanzRaw) || parseFecha(data?.[2]?.[6]);
+  // fechas del encabezado: la que tenga etiqueta "lanz" o la primera = lanzado; "fin" o la segunda = fin preparación
+  const fechas = fechasEncabezado(data, Math.max(hr, 4));
+  console.log("Fechas encontradas:", JSON.stringify(fechas.map(f => `${f.fecha} ${f.hora} (fila ${f.r}, col ${f.c}, "${f.label}")`)));
+  let fl = fechas.find(f => /lanz/.test(f.label)) || fechas[0];
+  let fp = fechas.find(f => /fin|final|termin/.test(f.label)) || fechas.find(f => f !== fl);
+  if (fp && fl && (fp.fecha + fp.hora) < (fl.fecha + fl.hora)) [fl, fp] = [fp, fl];
+
   if (!fl) {
     const m = fs.statSync(ruta).mtime;
     fl = { fecha: `${m.getFullYear()}-${pad(m.getMonth() + 1)}-${pad(m.getDate())}`, hora: `${pad(m.getHours())}:${pad(m.getMinutes())}`, seg: "00" };
@@ -160,11 +159,8 @@ for (const archivo of archivos) {
   }
   const { fecha, hora } = fl;
   const lanzado = `${fecha.replace(/-/g, "/")} ${hora}:${fl.seg || "00"}`;
-
-  const fp = parseFecha(buscarValor(data, ["fin preparacion", "fin de preparacion", "finalizado", "fin prep"]));
   const finPreparacion = fp ? `${fp.fecha} ${fp.hora}` : "";
 
-  const { inicio, idx, labels } = detectarColumnas(data);
   console.log("Encabezados:", JSON.stringify(labels.map((l, i) => l && `${i}:${l}`).filter(Boolean)));
   console.log("Columnas:", JSON.stringify(idx));
 
@@ -191,9 +187,16 @@ for (const archivo of archivos) {
     ]);
   }
 
-  // validación: pendiente = pedidas - servidas
+  // Bultos servidos vacíos → calcular proporcional a unidades servidas
+  const sumBS = lineas.reduce((a, l) => a + l[11], 0);
+  const sumUS = lineas.reduce((a, l) => a + l[6], 0);
+  if (!sumBS && sumUS) {
+    console.log("⚠ Bultos servidos vacíos, se calculan por unidades");
+    lineas.forEach(l => { l[11] = l[4] ? Math.round(l[10] * l[6] / l[4]) : 0; });
+  }
+
   const ok = lineas.filter(l => Math.abs(l[7] - (l[4] - l[6])) < 0.01).length;
-  console.log(`Tienda: ${tienda} · ${fecha} ${hora} · fin ${finPreparacion || "—"} · líneas ${lineas.length} · cuadran ${ok}/${lineas.length}`);
+  console.log(`Tienda: ${tienda} · lanzado ${lanzado} · fin ${finPreparacion || "—"} · líneas ${lineas.length} · cuadran ${ok}/${lineas.length}`);
   lineas.slice(0, 2).forEach(l => console.log("  ", JSON.stringify(l)));
   if (!lineas.length) { console.log("❌ Sin líneas, se omite"); continue; }
 
