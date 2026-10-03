@@ -8,7 +8,8 @@ const columnas = [
   "pedido", "codigo", "ean", "descripcion",
   "u_pedidas", "u_anuladas", "u_servidas", "pte_servir",
   "stock", "ubicacion", "bultos_pedidos", "bultos_servidos",
-  "proveedor"
+  "proveedor", "bultos_anulados",
+  "packs_pedidos", "packs_servidos", "uni_pedidas", "uni_servidas"
 ];
 
 // Nombre exacto del encabezado en el Excel (sin acentos, mayúsculas)
@@ -29,11 +30,19 @@ const HEADERS = {
   ubiactual:       ["UBIACTUAL"]
 };
 
-const up = s => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+const up = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 const txt = v => String(v ?? "").replace(/\s+/g, " ").trim();
 const num = v => { if (typeof v === "number") return v; const n = parseFloat(String(v ?? "").replace(/,/g, "").trim()); return isNaN(n) ? 0 : n; };
 const pad = n => String(n).padStart(2, "0");
-const cajas = v => { const m = String(v ?? "").match(/(\d+)\s*Cj/i); return m ? Number(m[1]) : num(v); };
+// "3 Cjs, 1 Pcks, 2 Uni" -> { c: 3, p: 1, u: 2 }. Si viene solo un número, se toma como cajas.
+const formato = v => {
+  const r = { c: 0, p: 0, u: 0 }; let hit = false;
+  for (const [, n, k] of String(v ?? "").matchAll(/(-?\d+)\s*(Cj|Pck|Un)/gi)) {
+    hit = true; r[{ cj: "c", pck: "p", un: "u" }[k.toLowerCase()]] += Number(n);
+  }
+  if (!hit) r.c = num(v);
+  return r;
+};
 
 function parseFecha(v) {
   if (v === "" || v == null) return null;
@@ -100,6 +109,8 @@ for (const archivo of archivos) {
     const row = data[i] || [];
     const pedido = txt(g(row, "pedido")).replace(/^0+/, "");
     if (!pedido || !/^\d+$/.test(pedido)) continue;
+    const fPed = formato(g(row, "bultos_pedidos"));
+    const fSrv = formato(g(row, "bultos_servidos"));
     lineas.push([
       pedido,
       txt(g(row, "codigo")),
@@ -111,9 +122,12 @@ for (const archivo of archivos) {
       num(g(row, "pte_servir")),
       num(g(row, "stock")),
       txt(g(row, "ubicacion")) || txt(g(row, "ubiactual")),
-      cajas(g(row, "bultos_pedidos")),
-      cajas(g(row, "bultos_servidos")),
-      up(g(row, "proveedor"))
+      fPed.c,
+      fSrv.c,
+      up(g(row, "proveedor")),
+      null,          // bultos_anulados: lo calcula el dashboard
+      fPed.p, fSrv.p, // packs pedidos / servidos
+      fPed.u, fSrv.u  // unidades sueltas pedidas / servidas
     ]);
   }
   if (!lineas.length) { console.log(`❌ ${archivo}: sin líneas`); continue; }
@@ -123,10 +137,10 @@ for (const archivo of archivos) {
   ids.add(id);
   despachos.push({ id, numero, archivo, tienda, fecha, hora, lanzado, finPreparacion, lineas });
 
-  // control: unidades
-  const s = lineas.reduce((a, l) => ({ p: a.p + l[4], an: a.an + l[5], sv: a.sv + l[6], bp: a.bp + l[10], bs: a.bs + l[11] }), { p: 0, an: 0, sv: 0, bp: 0, bs: 0 });
+  // control: unidades, cajas, packs y unidades sueltas
+  const s = lineas.reduce((a, l) => ({ p: a.p + l[4], an: a.an + l[5], sv: a.sv + l[6], bp: a.bp + l[10], bs: a.bs + l[11], pp: a.pp + l[14], ps: a.ps + l[15], xp: a.xp + l[16], xs: a.xs + l[17] }), { p: 0, an: 0, sv: 0, bp: 0, bs: 0, pp: 0, ps: 0, xp: 0, xs: 0 });
   const raro = s.an > s.p || s.sv > s.p ? "  ⚠ REVISAR" : "";
-  console.log(`✔ ${archivo} · ${tienda} · ${lanzado} · ${lineas.length} lín · u ped ${s.p} anul ${s.an} serv ${s.sv} · cjs ${s.bs}/${s.bp}${raro}`);
+  console.log(`✔ ${archivo} · ${tienda} · ${lanzado} · ${lineas.length} lín · u ped ${s.p} anul ${s.an} serv ${s.sv} · cjs ${s.bs}/${s.bp} · pcks ${s.ps}/${s.pp} · uni ${s.xs}/${s.xp}${raro}`);
   if (raro) console.log("   encabezados:", JSON.stringify(H.map((h, i) => h && `${XLSX.utils.encode_col(i)}:${h}`).filter(Boolean)));
 }
 
